@@ -26,6 +26,7 @@ htmlcov/
 
 # Data & vector stores (local artifacts, not source)
 data/
+vector_db/
 *.faiss
 *.sqlite3
 chroma/
