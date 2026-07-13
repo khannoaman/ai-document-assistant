@@ -25,6 +25,7 @@ env/
 htmlcov/
 
 # Data & vector stores (local artifacts, not source)
+docs/
 data/
 vector_db/
 *.faiss

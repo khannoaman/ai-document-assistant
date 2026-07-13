@@ -8,7 +8,13 @@ langchain-google-genai==4.2.7
 langchain-text-splitters==1.1.2
 
 # --- Document loaders ---
-pypdf==6.14.2
+pdfplumber==0.11.10
+python-magic==0.4.27
+python-pptx==1.0.2
+docx2txt==0.9
 
 # --- Vector store ---
 langchain-chroma==1.1.0
+
+# --- Observability ---
+logfire==4.37.0
