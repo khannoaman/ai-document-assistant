@@ -1,7 +1,7 @@
 import logfire
 from langchain_core.documents import Document
 
-from app.rag.chunking.splitters import generic_splitter, md_splitter
+from app.indexing.chunking.splitters import generic_splitter, md_splitter
 
 logfire.configure(send_to_logfire="if-token-present")
 

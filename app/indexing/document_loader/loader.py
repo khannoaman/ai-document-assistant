@@ -3,11 +3,11 @@ from pathlib import Path
 import logfire
 from langchain_core.documents import Document
 
-from app.rag.document_loader.detection import detect_mime_type
-from app.rag.document_loader.exceptions import EmptyContentError, UnsupportedFileType
-from app.rag.document_loader.loaders import LOADER_REGISTRY
-from app.rag.document_loader.normalize import normalize_metadata
-from app.rag.document_loader.validators import passes_content_check
+from app.indexing.document_loader.detection import detect_mime_type
+from app.indexing.document_loader.exceptions import EmptyContentError, UnsupportedFileType
+from app.indexing.document_loader.loaders import LOADER_REGISTRY
+from app.indexing.document_loader.normalize import normalize_metadata
+from app.indexing.document_loader.validators import passes_content_check
 
 logfire.configure(send_to_logfire="if-token-present")
 

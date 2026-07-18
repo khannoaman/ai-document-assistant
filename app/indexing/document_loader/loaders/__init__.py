@@ -1,4 +1,4 @@
-from app.rag.document_loader.loaders import docx_loader, pdf_loader, pptx_loader, text_loader
+from app.indexing.document_loader.loaders import docx_loader, pdf_loader, pptx_loader, text_loader
 
 # Keyed by MIME type (via python-magic content sniffing), not file extension.
 LOADER_REGISTRY = {
