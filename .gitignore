@@ -16,6 +16,7 @@ dist/
 .venv/
 venv/
 env/
+notebook/
 
 # Testing / tooling
 .pytest_cache/

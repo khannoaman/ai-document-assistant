@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     groq_api_key: SecretStr | None = None
     groq_fallback_api_key: SecretStr | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
     qdrant_api_key: SecretStr | None = None
     qdrant_cluster_endpoint: str | None = None
@@ -25,6 +26,9 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 100
     min_content_length: int = 20
+
+    retrieval_top_k: int = 5
+    min_relevance_score: float = 0.5
 
     base_dir: Path = _BASE_DIR
     data_dir: Path = _BASE_DIR / "data"
