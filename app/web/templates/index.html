@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<main>
+  <h1>AI Document Assistant</h1>
+
+  <section id="upload-section">
+    <h2>Upload documents</h2>
+    <form hx-post="/upload" hx-target="#status" hx-encoding="multipart/form-data">
+      <input type="file" name="files" multiple required>
+      <button type="submit">Upload &amp; Index</button>
+    </form>
+    <div id="status" hx-get="/status" hx-trigger="every 2s">
+      <p>Status: idle</p>
+    </div>
+  </section>
+
+  <section id="chat-section">
+    <h2>Ask a question</h2>
+    <div id="chat-log"></div>
+    <form hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-on::after-request="this.reset()">
+      <input type="text" name="question" placeholder="Ask something about your documents..." required autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+  </section>
+</main>
+{% endblock %}
