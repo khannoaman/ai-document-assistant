@@ -16,11 +16,10 @@ def generate_chunk_id(chunk: Document) -> str:
     duplicating it; changed content at the same position gets a new ID
     rather than silently keeping stale data.
     """
-    source = chunk.metadata.get("source_file", "")
+    source = chunk.metadata.get("file_path", "")
     position = (
         chunk.metadata.get("page_number")
         or chunk.metadata.get("slide_number")
-        or chunk.metadata.get("section_header")
         or ""
     )
     content_hash = hashlib.sha256(chunk.page_content.encode()).hexdigest()[:16]

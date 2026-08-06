@@ -93,5 +93,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     for doc, score in retrieve(args.query, k=args.k):
-        print(f"[{score:.4f}] {doc.metadata.get('source_file')} (page {doc.metadata.get('page_number')})")
+        print(f"[{score:.4f}] {doc.metadata.get('file_name')} (page {doc.metadata.get('page_number')})")
         print(doc.page_content[:300], "\n")

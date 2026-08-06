@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     embedding_provider: Literal["huggingface", "gemini"] = "huggingface"
     huggingface_embedding_model: str = "BAAI/bge-small-en-v1.5"
-    gemini_embedding_model: str = "models/embedding-001"
+    gemini_embedding_model: str = "models/gemini-embedding-001"
 
     chunk_size: int = 800
     chunk_overlap: int = 100

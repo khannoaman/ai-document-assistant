@@ -7,7 +7,7 @@
     <ul>
     {% for s in sources %}
       <li>
-        {{ s.source_file }}
+        {{ s.file_name }}
         {%- if s.page_number %} (page {{ s.page_number }}){% endif -%}
         {%- if s.slide_number %} (slide {{ s.slide_number }}){% endif -%}
         &mdash; score {{ "%.3f"|format(s.score) }}

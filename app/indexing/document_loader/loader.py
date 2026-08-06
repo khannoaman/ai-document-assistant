@@ -35,7 +35,7 @@ def load_document(file_path: str) -> list[Document]:
             logfire.error("loader failed", file_path=file_path, error=str(e))
             return []
 
-        validated_docs = []
+        normalized_docs = []
         for doc in raw_docs:
             if not passes_content_check(doc):
                 logfire.warn(
@@ -45,12 +45,12 @@ def load_document(file_path: str) -> list[Document]:
                     content_length=len(doc.page_content.strip()),
                 )
                 continue
-            validated_docs.append(doc)
+            normalized_docs.append(normalize_metadata(doc, file_path, mime_type))
 
-        if not validated_docs:
+        if not normalized_docs:
             logfire.warn("file yielded no usable content after filtering", file_path=file_path)
 
-        return [normalize_metadata(doc, file_path, mime_type) for doc in validated_docs]
+        return normalized_docs
 
 
 def load_documents(directory: str) -> list[Document]:

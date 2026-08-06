@@ -28,7 +28,7 @@ _NO_CONTEXT_ANSWER = "I don't have relevant information in the indexed documents
 def _format_context(results: list[tuple[Document, float]]) -> str:
     blocks = []
     for i, (doc, _) in enumerate(results, start=1):
-        source = doc.metadata.get("source_file")
+        source = doc.metadata.get("file_name")
         position = doc.metadata.get("page_number") or doc.metadata.get("slide_number")
         location = f" (page {position})" if position else ""
         blocks.append(f"[{i}] Source: {source}{location}\n{doc.page_content}")
@@ -60,7 +60,7 @@ def generate_answer(
         response = get_chat_model().invoke(messages)
         sources = [
             {
-                "source_file": doc.metadata.get("source_file"),
+                "file_name": doc.metadata.get("file_name"),
                 "page_number": doc.metadata.get("page_number"),
                 "slide_number": doc.metadata.get("slide_number"),
                 "score": score,
@@ -84,4 +84,4 @@ if __name__ == "__main__":
     if result["sources"]:
         print("\nSources:")
         for s in result["sources"]:
-            print(f"- {s['source_file']} (page {s.get('page_number')}, score {s['score']:.4f})")
+            print(f"- {s['file_name']} (page {s.get('page_number')}, score {s['score']:.4f})")
