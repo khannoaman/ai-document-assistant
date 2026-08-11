@@ -14,6 +14,9 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue, PayloadSche
 
 from app.config import settings
 from app.models import embedding_model
+from app.retrieval.bm25_index import search_bm25
+from app.retrieval.fusion import mmr_select, reciprocal_rank_fusion
+from app.retrieval.reranker import rerank
 from app.vectorstore.client import get_qdrant_client
 
 logfire.configure(send_to_logfire="if-token-present")
@@ -57,9 +60,11 @@ def retrieve(
     k: int | None = None,
     filters: dict[str, Any] | None = None,
 ) -> list[tuple[Document, float]]:
-    """Embed `query` and return the top-k (chunk, similarity_score) pairs
-    from the indexed collection, ranked best-first."""
+    """Hybrid retrieval: fuse dense (Qdrant) + keyword (BM25) candidates via
+    Reciprocal Rank Fusion, cross-encoder rerank the fused pool, then select
+    the final top-k with MMR for relevance/diversity balance."""
     k = k if k is not None else settings.retrieval_top_k
+    fetch_k = settings.retrieval_fetch_k
 
     with logfire.span("retrieval.search", query=query, k=k):
         client = get_qdrant_client()
@@ -79,9 +84,17 @@ def retrieve(
             embedding=embedding_model,
         )
 
-        results = vectorstore.similarity_search_with_score(query, k=k, filter=_build_filter(filters))
-        logfire.info("retrieval complete", result_count=len(results))
-        return results
+        dense = vectorstore.similarity_search_with_score(query, k=fetch_k, filter=_build_filter(filters))
+        bm25 = search_bm25(client, query, fetch_k, filters=filters)
+        logfire.info("hybrid candidates", dense_count=len(dense), bm25_count=len(bm25))
+
+        fused = reciprocal_rank_fusion([dense, bm25], k=settings.rrf_k)
+        reranked = rerank(query, fused)
+        logfire.info("reranked", candidate_count=len(reranked))
+
+        final = mmr_select(query, reranked[: settings.rerank_top_n], k=k, lambda_mult=settings.mmr_lambda)
+        logfire.info("retrieval complete", result_count=len(final))
+        return final
 
 
 if __name__ == "__main__":
@@ -93,5 +106,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     for doc, score in retrieve(args.query, k=args.k):
+        # score is a cross-encoder rerank logit here, not raw cosine similarity
         print(f"[{score:.4f}] {doc.metadata.get('file_name')} (page {doc.metadata.get('page_number')})")
         print(doc.page_content[:300], "\n")

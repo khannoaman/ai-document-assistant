@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Request, UploadFile
 
 from app.config import settings
 from app.indexing.pipeline import run_indexing_pipeline
+from app.retrieval import invalidate_bm25_index
 from app.web.state import indexing_state, set_status
 from app.web.templates import templates
 
@@ -14,6 +15,7 @@ router = APIRouter()
 def _run_indexing() -> None:
     try:
         run_indexing_pipeline()
+        invalidate_bm25_index()
         set_status("done", "Indexing complete.")
     except Exception as e:
         logfire.error("background indexing failed", error=str(e))

@@ -1,3 +1,4 @@
+from app.retrieval.bm25_index import invalidate_bm25_index
 from app.retrieval.retriever import retrieve
 
-__all__ = ["retrieve"]
+__all__ = ["retrieve", "invalidate_bm25_index"]

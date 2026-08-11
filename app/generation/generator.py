@@ -11,6 +11,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.config import settings
+from app.generation.query_condenser import condense_question
 from app.models import get_chat_model
 from app.retrieval import retrieve
 
@@ -37,17 +38,28 @@ def _format_context(results: list[tuple[Document, float]]) -> str:
 
 def generate_answer(
     question: str,
+    chat_history: list[tuple[str, str]] | None = None,
     k: int | None = None,
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Retrieve context via app.retrieval.retrieve() and synthesize a
-    grounded answer. Returns {"answer": str, "sources": list[dict], "context_used": bool}."""
+    """Condense `question` against `chat_history` (if any), retrieve context
+    via app.retrieval.retrieve() and synthesize a grounded answer. Returns
+    {"answer": str, "sources": list[dict], "context_used": bool, "standalone_question": str}."""
     with logfire.span("generation.answer", question=question):
-        results = retrieve(question, k=k, filters=filters)
+        standalone_question = condense_question(chat_history or [], question)
 
-        if not results or results[0][1] < settings.min_relevance_score:
+        results = retrieve(standalone_question, k=k, filters=filters)
+
+        # results are MMR-ordered (relevance + diversity), not sorted by
+        # score, so the gate must check the best score present, not results[0]
+        if not results or max(score for _, score in results) < settings.min_rerank_score:
             logfire.info("no sufficiently relevant context found")
-            return {"answer": _NO_CONTEXT_ANSWER, "sources": [], "context_used": False}
+            return {
+                "answer": _NO_CONTEXT_ANSWER,
+                "sources": [],
+                "context_used": False,
+                "standalone_question": standalone_question,
+            }
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -55,7 +67,7 @@ def generate_answer(
                 ("human", "Context:\n{context}\n\nQuestion: {question}"),
             ]
         )
-        messages = prompt.format_messages(context=_format_context(results), question=question)
+        messages = prompt.format_messages(context=_format_context(results), question=standalone_question)
 
         response = get_chat_model().invoke(messages)
         sources = [
@@ -68,7 +80,12 @@ def generate_answer(
             for doc, score in results
         ]
         logfire.info("generated answer", source_count=len(sources))
-        return {"answer": response.content, "sources": sources, "context_used": True}
+        return {
+            "answer": response.content,
+            "sources": sources,
+            "context_used": True,
+            "standalone_question": standalone_question,
+        }
 
 
 if __name__ == "__main__":
@@ -77,9 +94,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Answer a question using retrieved context (RAG)")
     parser.add_argument("question")
     parser.add_argument("--k", type=int, default=None)
+    parser.add_argument(
+        "--history",
+        action="append",
+        default=[],
+        help="Prior turn as 'question::answer'; repeatable, oldest first",
+    )
     args = parser.parse_args()
 
-    result = generate_answer(args.question, k=args.k)
+    chat_history = [tuple(h.split("::", 1)) for h in args.history]
+    result = generate_answer(args.question, chat_history=chat_history, k=args.k)
+    if result.get("standalone_question") != args.question:
+        print(f"(standalone query: {result['standalone_question']})")
     print(result["answer"])
     if result["sources"]:
         print("\nSources:")

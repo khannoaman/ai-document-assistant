@@ -28,7 +28,21 @@ class Settings(BaseSettings):
     min_content_length: int = 20
 
     retrieval_top_k: int = 5
-    min_relevance_score: float = 0.5
+
+    # --- Hybrid retrieval / re-ranking ---
+    retrieval_fetch_k: int = 20        # candidate pool size per sub-method (dense, BM25) before fusion
+    rrf_k: int = 60                    # RRF damping constant (standard value from the original paper)
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rerank_top_n: int = 10             # candidates kept after cross-encoder rerank, before MMR (keep >= retrieval_top_k)
+    mmr_lambda: float = 0.5            # 0 = max diversity, 1 = max relevance
+    bm25_scroll_batch_size: int = 256  # page size when scrolling Qdrant to build the BM25 corpus
+    # cross-encoder logit threshold, not cosine similarity. -4.0 separates
+    # observed off-topic queries (~-10 to -11) from on-topic ones, including
+    # generic/summary-style questions that don't score strongly positive.
+    min_rerank_score: float = -4.0
+
+    # --- Conversational memory ---
+    max_memory_turns: int = 5          # prior turns retained and fed to the condenser prompt
 
     base_dir: Path = _BASE_DIR
     data_dir: Path = _BASE_DIR / "data"
