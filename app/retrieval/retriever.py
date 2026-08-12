@@ -93,6 +93,10 @@ def retrieve(
         logfire.info("reranked", candidate_count=len(reranked))
 
         final = mmr_select(query, reranked[: settings.rerank_top_n], k=k, lambda_mult=settings.mmr_lambda)
+        # MMR selects for relevance + diversity, not a pure score sort — reorder
+        # the final set by score so "best match first" is always a safe assumption
+        # for callers, instead of only patching the one call site that assumed it.
+        final.sort(key=lambda pair: pair[1], reverse=True)
         logfire.info("retrieval complete", result_count=len(final))
         return final
 
