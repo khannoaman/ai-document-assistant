@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     groq_api_key: SecretStr | None = None
     groq_fallback_api_key: SecretStr | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
 
     qdrant_api_key: SecretStr | None = None
     qdrant_cluster_endpoint: str | None = None
