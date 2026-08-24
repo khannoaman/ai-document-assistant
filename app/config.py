@@ -43,6 +43,8 @@ class Settings(BaseSettings):
 
     # --- Conversational memory ---
     max_memory_turns: int = 5          # prior turns retained and fed to the condenser prompt
+    redis_url: str = "redis://localhost:6379/0"
+    session_ttl_seconds: int = 1800    # sliding expiry: refreshed on every turn, resets if idle
 
     base_dir: Path = _BASE_DIR
     data_dir: Path = _BASE_DIR / "data"
