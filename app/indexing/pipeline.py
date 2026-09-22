@@ -8,7 +8,7 @@ import logfire
 
 from app.config import settings
 from app.indexing.chunking import chunk_document
-from app.indexing.document_loader import load_documents
+from app.indexing.document_loader import load_document, load_documents
 from app.vectorstore.indexer import index_documents
 
 logfire.configure(send_to_logfire="if-token-present")
@@ -19,6 +19,25 @@ def run_indexing_pipeline(directory: str | Path | None = None) -> None:
 
     with logfire.span("indexing.pipeline.run", directory=directory):
         docs = load_documents(directory)
+        logfire.info("loaded documents", doc_count=len(docs))
+
+        chunks = chunk_document(docs)
+        logfire.info("chunked documents", chunk_count=len(chunks))
+
+        index_documents(chunks)
+
+
+def run_indexing_pipeline_for_paths(file_paths: list[str | Path]) -> None:
+    """Index only the given files, instead of rescanning the whole data
+    directory — used after an upload so re-embedding cost scales with the
+    new files, not the full historical corpus. Chunk IDs are deterministic
+    from file path + position + content hash, so this is a pure subset of
+    what a full run_indexing_pipeline() call would produce, not a divergent
+    path — the same chunk gets the same Qdrant point id either way."""
+    paths = [str(p) for p in file_paths]
+
+    with logfire.span("indexing.pipeline.run_for_paths", file_count=len(paths)):
+        docs = [doc for path in paths for doc in load_document(path)]
         logfire.info("loaded documents", doc_count=len(docs))
 
         chunks = chunk_document(docs)

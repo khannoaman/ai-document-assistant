@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.post("/chat")
-async def chat(request: Request, question: str = Form(...)):
+def chat(request: Request, question: str = Form(...)):
     session_id = get_session_id(request)
     history = get_history(session_id)
     result = generate_answer(question, chat_history=history)
