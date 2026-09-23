@@ -1,3 +1,4 @@
+import markdown
 from fastapi import APIRouter, Form, Request
 
 from app.generation import generate_answer
@@ -12,13 +13,21 @@ def chat(request: Request, question: str = Form(...)):
     session_id = get_session_id(request)
     history = get_history(session_id)
     result = generate_answer(question, chat_history=history)
-    add_turn(session_id, question, result.get("standalone_question", question), result["answer"])
+    add_turn(
+        session_id,
+        question,
+        result.get("standalone_question", question),
+        result["answer"],
+        result["sources"],
+    )
     response = templates.TemplateResponse(
         request,
         "partials/chat_message.html",
         {
             "question": question,
-            "answer": result["answer"],
+            # the LLM answers in markdown (bold, lists); render it to HTML here
+            # rather than showing raw "**text**" syntax in the UI
+            "answer_html": markdown.markdown(result["answer"]),
             "sources": result["sources"],
         },
     )

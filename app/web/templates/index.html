@@ -1,26 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
-<main>
-  <h1>AI Document Assistant</h1>
-
-  <section id="upload-section">
-    <h2>Upload documents</h2>
-    <form hx-post="/upload" hx-target="#status" hx-encoding="multipart/form-data">
-      <input type="file" name="files" multiple required>
-      <button type="submit">Upload &amp; Index</button>
-    </form>
-    <div id="status" hx-get="/status" hx-trigger="every 2s">
-      <p>Status: idle</p>
+<div class="page">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">AI</span>
+      <div>
+        <h1>Document Assistant</h1>
+        <p class="tagline">Grounded, cited answers over your PDFs, Word docs, and slides — powered by hybrid retrieval.</p>
+      </div>
     </div>
-  </section>
+  </header>
 
-  <section id="chat-section">
-    <h2>Ask a question</h2>
-    <div id="chat-log"></div>
-    <form hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-on::after-request="this.reset()">
-      <input type="text" name="question" placeholder="Ask something about your documents..." required autocomplete="off">
-      <button type="submit">Send</button>
-    </form>
-  </section>
-</main>
+  <main>
+    <section class="card" id="upload-section">
+      <div class="card-header">
+        <h2>Upload documents</h2>
+        <p class="card-subtitle">PDF, DOCX, PPTX, and TXT supported.</p>
+      </div>
+
+      <form hx-post="/upload" hx-target="#status" hx-encoding="multipart/form-data"
+            hx-on::after-request="this.reset(); document.getElementById('file-list').textContent = ''">
+        <label class="dropzone" for="file-input" id="dropzone">
+          <input type="file" id="file-input" name="files" multiple required hidden>
+          <div class="dropzone-icon" aria-hidden="true">&#8593;</div>
+          <div class="dropzone-text"><strong>Click to choose files</strong> or drag and drop</div>
+          <div class="dropzone-filenames" id="file-list"></div>
+        </label>
+        <button type="submit" class="btn btn-primary">Upload &amp; Index</button>
+      </form>
+
+      <div id="status" hx-get="/status" hx-trigger="every 2s">
+        <div class="status-badge status-idle">
+          <span class="status-dot"></span>
+          <span>Idle</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="chat-section">
+      <div class="card-header">
+        <h2>Ask a question</h2>
+        <p class="card-subtitle">Answers are grounded in your uploaded documents, with cited sources.</p>
+      </div>
+
+      <div id="chat-log" class="chat-log">
+        {% for turn in chat_history %}
+          {% with question=turn.question, answer_html=turn.answer_html, sources=turn.sources %}
+            {% include "partials/chat_message.html" %}
+          {% endwith %}
+        {% endfor %}
+      </div>
+
+      <div class="thinking-indicator htmx-indicator" id="thinking" aria-live="polite">
+        <span></span><span></span><span></span>
+      </div>
+
+      <form hx-post="/chat" hx-target="#chat-log" hx-swap="beforeend" hx-indicator="#thinking"
+            hx-on::after-request="this.reset()" class="chat-form">
+        <input type="text" name="question" placeholder="Ask something about your documents..." required autocomplete="off">
+        <button type="submit" class="btn btn-primary">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Hybrid retrieval (dense + BM25) &middot; cross-encoder reranking &middot; MMR diversity &middot; conversational memory</p>
+  </footer>
+</div>
 {% endblock %}

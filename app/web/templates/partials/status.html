@@ -1,1 +1,4 @@
-<p class="status status-{{ state.status }}">Status: {{ state.status }}{% if state.message %} — {{ state.message }}{% endif %}</p>
+<div class="status-badge status-{{ state.status }}">
+  <span class="status-dot"></span>
+  <span>{{ state.status | capitalize }}{% if state.message %} &mdash; {{ state.message }}{% endif %}</span>
+</div>

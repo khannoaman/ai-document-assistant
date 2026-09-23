@@ -1,7 +1,8 @@
 import json
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 import redis
 from fastapi import Request
@@ -16,6 +17,7 @@ class Turn:
     question: str
     standalone_question: str
     answer: str
+    sources: list[dict[str, Any]] = field(default_factory=list)
 
 
 _redis_client: redis.Redis | None = None
@@ -59,9 +61,22 @@ def get_history(session_id: str) -> list[tuple[str, str]]:
     return [(turn.question, turn.answer) for turn in _load_turns(session_id)]
 
 
-def add_turn(session_id: str, question: str, standalone_question: str, answer: str) -> None:
+def get_turns(session_id: str) -> list[Turn]:
+    """Full turn records (including sources), for restoring the chat log on
+    page load — as opposed to get_history()'s lightweight (question, answer)
+    tuples, which are shaped for the condenser prompt."""
+    return _load_turns(session_id)
+
+
+def add_turn(
+    session_id: str,
+    question: str,
+    standalone_question: str,
+    answer: str,
+    sources: list[dict[str, Any]] | None = None,
+) -> None:
     turns = _load_turns(session_id)
-    turns.append(Turn(question, standalone_question, answer))
+    turns.append(Turn(question, standalone_question, answer, sources or []))
     if settings.max_memory_turns > 0 and len(turns) > settings.max_memory_turns:
         turns = turns[-settings.max_memory_turns :]
     _save_turns(session_id, turns)

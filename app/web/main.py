@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import markdown
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
+from app.web.memory import get_session_id, get_turns
 from app.web.routes import chat, upload
 from app.web.templates import templates
 
@@ -17,4 +19,13 @@ app.include_router(chat.router)
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    session_id = get_session_id(request)
+    chat_history = [
+        {
+            "question": turn.question,
+            "answer_html": markdown.markdown(turn.answer),
+            "sources": turn.sources,
+        }
+        for turn in get_turns(session_id)
+    ]
+    return templates.TemplateResponse(request, "index.html", {"chat_history": chat_history})

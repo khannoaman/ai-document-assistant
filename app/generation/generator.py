@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -25,6 +26,8 @@ _SYSTEM_PROMPT = (
 
 _NO_CONTEXT_ANSWER = "I don't have relevant information in the indexed documents to answer that."
 
+_CITATION_RE = re.compile(r"\[(\d+)\]")
+
 
 def _format_context(results: list[tuple[Document, float]]) -> str:
     blocks = []
@@ -34,6 +37,29 @@ def _format_context(results: list[tuple[Document, float]]) -> str:
         location = f" (page {position})" if position else ""
         blocks.append(f"[{i}] Source: {source}{location}\n{doc.page_content}")
     return "\n\n".join(blocks)
+
+
+def _build_sources(results: list[tuple[Document, float]], answer: str) -> list[dict[str, Any]]:
+    """Number each source to match the [n] marker _format_context gave it, then
+    keep only the ones the answer actually cites — retrieval always returns the
+    full top-k regardless of how many the model ends up using."""
+    all_sources = [
+        {
+            "citation_number": i,
+            "file_name": doc.metadata.get("file_name"),
+            "page_number": doc.metadata.get("page_number"),
+            "slide_number": doc.metadata.get("slide_number"),
+            "score": score,
+        }
+        for i, (doc, score) in enumerate(results, start=1)
+    ]
+
+    cited_numbers = {int(n) for n in _CITATION_RE.findall(answer)}
+    if not cited_numbers:
+        # model didn't use [n] markers at all — show everything retrieved
+        # rather than silently hiding sources for an otherwise grounded answer
+        return all_sources
+    return [s for s in all_sources if s["citation_number"] in cited_numbers]
 
 
 def generate_answer(
@@ -70,16 +96,8 @@ def generate_answer(
         messages = prompt.format_messages(context=_format_context(results), question=standalone_question)
 
         response = get_chat_model().invoke(messages)
-        sources = [
-            {
-                "file_name": doc.metadata.get("file_name"),
-                "page_number": doc.metadata.get("page_number"),
-                "slide_number": doc.metadata.get("slide_number"),
-                "score": score,
-            }
-            for doc, score in results
-        ]
-        logfire.info("generated answer", source_count=len(sources))
+        sources = _build_sources(results, response.content)
+        logfire.info("generated answer", source_count=len(sources), retrieved_count=len(results))
         return {
             "answer": response.content,
             "sources": sources,
@@ -110,4 +128,4 @@ if __name__ == "__main__":
     if result["sources"]:
         print("\nSources:")
         for s in result["sources"]:
-            print(f"- {s['file_name']} (page {s.get('page_number')}, score {s['score']:.4f})")
+            print(f"- [{s['citation_number']}] {s['file_name']} (page {s.get('page_number')}, score {s['score']:.4f})")

@@ -1,19 +1,21 @@
-<div class="message user"><strong>You:</strong> {{ question }}</div>
-<div class="message assistant">
-  <strong>Assistant:</strong> {{ answer }}
-  {% if sources %}
-  <details>
-    <summary>Sources ({{ sources|length }})</summary>
-    <ul>
-    {% for s in sources %}
-      <li>
-        {{ s.file_name }}
-        {%- if s.page_number %} (page {{ s.page_number }}){% endif -%}
-        {%- if s.slide_number %} (slide {{ s.slide_number }}){% endif -%}
-        &mdash; score {{ "%.3f"|format(s.score) }}
-      </li>
-    {% endfor %}
-    </ul>
-  </details>
-  {% endif %}
+<div class="chat-turn">
+  <div class="bubble bubble-user">{{ question }}</div>
+  <div class="bubble bubble-assistant">
+    <div class="answer">{{ answer_html | safe }}</div>
+    {% if sources %}
+    <details class="sources">
+      <summary>{{ sources|length }} source{{ "s" if sources|length != 1 else "" }}</summary>
+      <div class="source-chips">
+      {% for s in sources %}
+        <span class="chip">
+          <span class="chip-number">[{{ s.citation_number }}]</span>
+          {{ s.file_name }}
+          {%- if s.page_number %} &middot; p.{{ s.page_number }}{% endif -%}
+          {%- if s.slide_number %} &middot; slide {{ s.slide_number }}{% endif -%}
+        </span>
+      {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
 </div>
