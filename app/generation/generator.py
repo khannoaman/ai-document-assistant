@@ -20,13 +20,27 @@ logfire.configure(send_to_logfire="if-token-present")
 
 _SYSTEM_PROMPT = (
     "Answer the question using only the provided context. "
-    "Cite sources using the [n] markers shown in the context. "
+    "Cite sources using bracketed numeric markers in the exact form [n] (e.g. [1], [2]), "
+    "matching the [n] markers shown in the context. "
+    "Do not use any other citation style — for example, never use 【n†...】 or footnote-style citations. "
     "If the context doesn't contain the answer, say so plainly."
 )
 
 _NO_CONTEXT_ANSWER = "I don't have relevant information in the indexed documents to answer that."
 
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+
+# Some models (e.g. gpt-oss, which is trained on OpenAI's own product
+# conventions) default to OpenAI's file/browsing citation markup — like
+# `【2†L1-L4】` — instead of the `[n]` format requested above. Rewrite it to
+# `[n]` so both the displayed answer and _build_sources() below treat it the
+# same as a well-behaved response, rather than silently falling back to
+# "show every retrieved source" whenever a model ignores the instruction.
+_OPENAI_STYLE_CITATION_RE = re.compile(r"【\s*(\d+)[^\】]*】")
+
+
+def _normalize_citations(answer: str) -> str:
+    return _OPENAI_STYLE_CITATION_RE.sub(lambda m: f"[{m.group(1)}]", answer)
 
 
 def _format_context(results: list[tuple[Document, float]]) -> str:
@@ -96,10 +110,11 @@ def generate_answer(
         messages = prompt.format_messages(context=_format_context(results), question=standalone_question)
 
         response = get_chat_model().invoke(messages)
-        sources = _build_sources(results, response.content)
+        answer = _normalize_citations(response.content)
+        sources = _build_sources(results, answer)
         logfire.info("generated answer", source_count=len(sources), retrieved_count=len(results))
         return {
-            "answer": response.content,
+            "answer": answer,
             "sources": sources,
             "context_used": True,
             "standalone_question": standalone_question,
