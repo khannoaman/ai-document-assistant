@@ -1,0 +1,31 @@
+# Local environments — never bake secrets or host-specific venvs into the image
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+
+# Local data/artifacts — mounted as volumes at runtime instead, not baked in
+data/
+vector_db/
+notebook/
+docs/
+assets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# VCS / tooling / OS cruft
+.git/
+.gitignore
+.claude/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+# Docs — not needed inside the image
+*.md
