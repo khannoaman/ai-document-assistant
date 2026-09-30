@@ -12,7 +12,7 @@ from app.indexing.document_loader.validators import passes_content_check
 logfire.configure(send_to_logfire="if-token-present")
 
 
-def load_document(file_path: str) -> list[Document]:
+def load_document(file_path: str, session_id: str | None = None) -> list[Document]:
     with logfire.span("ingestion.load_document", file_path=file_path):
         try:
             mime_type = detect_mime_type(file_path)
@@ -45,7 +45,7 @@ def load_document(file_path: str) -> list[Document]:
                     content_length=len(doc.page_content.strip()),
                 )
                 continue
-            normalized_docs.append(normalize_metadata(doc, file_path, mime_type))
+            normalized_docs.append(normalize_metadata(doc, file_path, mime_type, session_id=session_id))
 
         if not normalized_docs:
             logfire.warn("file yielded no usable content after filtering", file_path=file_path)

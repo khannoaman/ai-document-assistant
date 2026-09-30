@@ -3,6 +3,7 @@ import markdown
 from fastapi import APIRouter, Form, Request
 
 from app.generation import generate_answer
+from app.retrieval import NoIndexedDocumentsError
 from app.web.memory import SESSION_COOKIE_NAME, add_turn, get_history, get_session_id
 from app.web.templates import templates
 
@@ -11,6 +12,7 @@ logfire.configure(send_to_logfire="if-token-present")
 router = APIRouter()
 
 _ERROR_ANSWER_HTML = "<p>Something went wrong while answering that. Please try again in a moment.</p>"
+_NO_DOCS_ANSWER_HTML = "<p>No documents have been indexed yet — upload a file above, then ask again.</p>"
 
 
 @router.post("/chat")
@@ -19,7 +21,7 @@ def chat(request: Request, question: str = Form(...)):
 
     try:
         history = get_history(session_id)
-        result = generate_answer(question, chat_history=history)
+        result = generate_answer(question, chat_history=history, session_id=session_id)
         add_turn(
             session_id,
             question,
@@ -31,6 +33,15 @@ def chat(request: Request, question: str = Form(...)):
         # rather than showing raw "**text**" syntax in the UI
         answer_html = markdown.markdown(result["answer"])
         sources = result["sources"]
+    except NoIndexedDocumentsError:
+        # first question before anything's ever been uploaded — a normal,
+        # expected state, not a failure, so it gets its own message instead
+        # of the generic error fallback (and telling the user to just
+        # "try again" would be actively wrong advice here). Deliberately
+        # not calling add_turn, same reasoning as the except below.
+        logfire.info("chat request before any documents indexed", question=question)
+        answer_html = _NO_DOCS_ANSWER_HTML
+        sources = []
     except Exception as e:
         # a Groq/Qdrant/Redis hiccup shouldn't surface a raw 500 to the user —
         # render a normal-looking assistant bubble instead. Deliberately not

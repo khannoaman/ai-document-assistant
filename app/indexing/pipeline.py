@@ -27,17 +27,21 @@ def run_indexing_pipeline(directory: str | Path | None = None) -> None:
         index_documents(chunks)
 
 
-def run_indexing_pipeline_for_paths(file_paths: list[str | Path]) -> None:
+def run_indexing_pipeline_for_paths(file_paths: list[str | Path], session_id: str | None = None) -> None:
     """Index only the given files, instead of rescanning the whole data
     directory — used after an upload so re-embedding cost scales with the
     new files, not the full historical corpus. Chunk IDs are deterministic
     from file path + position + content hash, so this is a pure subset of
     what a full run_indexing_pipeline() call would produce, not a divergent
-    path — the same chunk gets the same Qdrant point id either way."""
+    path — the same chunk gets the same Qdrant point id either way.
+
+    session_id scopes the resulting chunks to the uploading session (see
+    app/retrieval/retriever.py) — pass it for web uploads; leave it None
+    for CLI/bulk indexing, which is treated as public content."""
     paths = [str(p) for p in file_paths]
 
     with logfire.span("indexing.pipeline.run_for_paths", file_count=len(paths)):
-        docs = [doc for path in paths for doc in load_document(path)]
+        docs = [doc for path in paths for doc in load_document(path, session_id=session_id)]
         logfire.info("loaded documents", doc_count=len(docs))
 
         chunks = chunk_document(docs)

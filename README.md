@@ -1,253 +1,632 @@
 # AI Document Assistant
 
-A RAG (Retrieval-Augmented Generation) Q&A system: upload PDF, DOCX, PPTX, TXT, or Markdown documents, ask questions in plain English, and get answers grounded in — and cited back to — the actual source documents, instead of the model guessing from memory.
+A Retrieval-Augmented Generation (RAG) application for asking questions across PDF, DOCX, PPTX, TXT, and Markdown documents.
 
-Built to go past the "stuff everything into one vector search" version of RAG: it fuses dense and keyword retrieval, reranks with a cross-encoder, balances relevance against redundancy, and keeps multi-turn conversations coherent by rewriting follow-up questions before retrieval ever runs. The goal was to treat retrieval quality as a first-class engineering problem, not just an LLM prompting problem.
+The system combines **dense vector retrieval, BM25 keyword search, Reciprocal Rank Fusion, cross-encoder reranking, and Maximal Marginal Relevance (MMR)** to retrieve relevant context before generating an answer. It also supports multi-turn conversations by rewriting follow-up questions into standalone queries and provides citations back to the source document and page or slide.
 
 ![Demo of uploading a document and asking a grounded, cited question](assets/demo.gif)
 
-> Runs locally in a few minutes — see [Getting Started](#getting-started).
+> Runs locally with Python or Docker. See [Getting Started](#getting-started).
 
-## Key Highlights
+---
 
-- **Hybrid retrieval** — dense vector search (Qdrant) fused with BM25 keyword search via Reciprocal Rank Fusion
-- **Cross-encoder reranking** — query-aware relevance scoring on top of the fused candidates, with a confidence gate that refuses to answer from weak context
-- **MMR (Maximal Marginal Relevance) context selection** — trims redundant, overlapping chunks before they reach the LLM
-- **Conversational query rewriting** — follow-up questions are condensed into standalone queries before retrieval
-- **Grounded generation with citations** — every answer traces back to a specific file and page/slide
-- **Incremental indexing** — deterministic chunk IDs make re-indexing idempotent; uploads only re-embed what's new
-- **Resilient external calls** — retry with backoff on every LLM/embedding call, plus LLM key failover
-- **Observability built in** — structured Logfire spans across ingestion, retrieval, and generation
+## Key Features
 
-## Table of Contents
+* **Hybrid retrieval** — combines dense vector search with BM25 keyword search using Reciprocal Rank Fusion (RRF).
+* **Cross-encoder reranking** — re-scores retrieved candidates using query-aware relevance scoring.
+* **MMR context selection** — balances relevance and diversity to reduce redundant context.
+* **Conversational query rewriting** — converts follow-up questions into standalone queries before retrieval.
+* **Grounded answers with citations** — generated answers reference the specific source file and page or slide used as evidence.
+* **Incremental indexing** — deterministic chunk IDs make re-indexing idempotent and avoid unnecessary re-embedding.
+* **Session-scoped document isolation** — uploaded documents are only queryable by the session that uploaded them, using Qdrant payload filtering rather than a separate per-user database.
+* **Content-based document detection** — files are dispatched using their detected MIME type rather than relying only on file extensions.
+* **Resilient external calls** — API calls use exponential-backoff retries, with a secondary LLM API key available for failover.
+* **Background indexing** — document processing runs asynchronously so large uploads do not block the web request.
+* **Session-based conversation memory** — Redis stores conversation history using a sliding TTL.
+* **Observability** — Logfire provides structured spans across ingestion, retrieval, and generation.
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [How a Query Actually Works](#how-a-query-actually-works)
-- [Example](#example)
-- [Design Decisions](#design-decisions)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Known Limitations](#known-limitations)
-- [Roadmap](#roadmap)
+---
 
-## Overview
+## Why This Project?
 
-Upload documents through the web UI, and it will:
+A basic RAG pipeline can often be summarized as:
 
-1. **Ingest** — detect each file's real type (not just its extension), extract text with a loader suited to that format, validate content, and split it into overlapping chunks.
-2. **Index** — turn each chunk into a vector embedding and store it in a vector database (Qdrant) so it can be found by meaning, not just exact words. A keyword index (BM25, for catching exact terms like names or IDs) is also built from that same store, the first time it's needed.
-3. **Answer** — given a question, retrieve candidates from both indexes, fuse and rerank them, and pass only the most relevant, non-redundant context to an LLM that answers with inline `[n]` citations back to the source file and page/slide.
+```text
+Document → Chunks → Embeddings → Vector Search → LLM
+```
 
-The web app also remembers conversation history per browser session (Redis-backed, cookie-based), so follow-up questions like "what about the second one?" resolve correctly.
+While this works for simple use cases, a single retrieval strategy can struggle with exact terms, ambiguous follow-up questions, irrelevant results, and redundant context.
 
-## Architecture
-
-At a glance: documents get chunked and embedded into Qdrant once; every question then runs through condensation → hybrid retrieval → fusion → reranking → diversity selection → generation before an answer comes back with citations.
+This project treats **retrieval as a multi-stage pipeline**:
 
 ```mermaid
 flowchart LR
     subgraph Ingestion["Ingestion Pipeline"]
         direction TB
-        A["Upload (web) or\ndata/ folder (CLI)"] --> B["MIME-sniff & dispatch\n(PDF / DOCX / PPTX / TXT / MD)"]
-        B --> C["Validate content\n(drop empty/low-signal chunks)"]
-        C --> D["Chunk\n(recursive splitter, per file type)"]
-        D --> E["Embed + deterministic ID\n(hash of source+position+content)"]
-        E --> F[("Qdrant\nvector store")]
+        A["Documents"] --> B["Chunking +\nEmbedding"]
+        B --> C[("Qdrant\nvector store")]
     end
 
     subgraph Query["Query Pipeline"]
         direction TB
-        Q["User question +\nchat history"] --> H["Condense into a\nstandalone question (LLM)"]
-        H --> I1["Dense search (Qdrant)"]
-        H --> I2["BM25 keyword search"]
-        I1 --> J["Reciprocal Rank Fusion"]
+        Q["Question +\nchat history"] --> H["Query\ncondensation"]
+        H --> I1["Dense retrieval"]
+        H --> I2["BM25 retrieval"]
+        I1 --> J["Reciprocal Rank\nFusion"]
         I2 --> J
-        J --> K["Cross-encoder rerank"]
-        K --> L["MMR selection\n(relevance vs. diversity)"]
-        L --> M["LLM answer generation\n(Groq, w/ failover key)"]
-        M --> N["Answer + numbered\nsource citations"]
+        J --> K["Cross-encoder\nrerank"]
+        K --> L["MMR selection"]
+        L --> M["LLM generation"]
+        M --> N["Cited answer"]
     end
 
-    F -.source of.-> I1
-    F -.scrolled to build.-> I2
+    C -.-> I1
+    C -.-> I2
 ```
 
-Everything above the vector store runs synchronously in a FastAPI request; indexing runs as a background task so an upload doesn't block the UI.
+The goal is to improve the quality of the context supplied to the LLM rather than relying on generation alone. See the [Architecture](#architecture) section below for each pipeline broken out in detail.
 
-## How a Query Actually Works
+---
 
-Here's the step-by-step flow behind every answer:
+## Architecture
 
-1. **Query condensation.** If there's prior chat history, an LLM call first rewrites the follow-up question ("what about that one?") into a standalone one ("what does the second thesis chapter say about X?"). Retrieval only ever sees standalone questions, so it never has to guess what a pronoun refers to. On the first message of a conversation, this step is skipped entirely — there's nothing to resolve yet, so why spend an extra LLM call.
-2. **Hybrid candidate retrieval.** The standalone question is sent to two different search methods at once: a dense vector search (finds passages that mean the same thing, even with different wording) and a BM25 keyword search (finds exact-term matches — names, IDs, acronyms — that meaning-based search can blur together). Running both catches cases either one alone would miss.
-3. **Reciprocal Rank Fusion (RRF) — merging the two result lists.** The two searches' scores aren't directly comparable (one is a similarity score, the other a keyword-match score), so instead of trying to average them, each candidate is ranked by *where it lands* in each list (1st place, 2nd place, etc.) using the formula `1 / (k + rank)`, and the two ranked lists are merged on that basis. Ranking by position sidesteps the apples-to-oranges score problem entirely.
-4. **Cross-encoder reranking.** The merged pool (top 20 from each method, by default) is re-scored by a small model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) that reads the question and each passage *together*, rather than comparing them as separate, pre-computed vectors. That makes it noticeably more accurate — at the cost of being too slow to run over an entire document collection, which is why it only touches this already-narrowed shortlist. Its score doubles as a confidence check: if even the best-scoring passage falls below a threshold, the app answers "I don't have relevant information" instead of guessing from weak context.
-5. **MMR selection — trimming redundancy.** The reranked shortlist still gets narrowed to the final answer count using Maximal Marginal Relevance (MMR), which balances relevance against how much each candidate overlaps with the others already picked. In practice: five near-duplicate chunks won't crowd out one genuinely different, relevant passage.
-6. **Grounded generation.** The final passages are numbered and handed to the LLM with an explicit instruction to cite them using `[n]` markers, and to say plainly when the context doesn't answer the question. The app then reads those `[n]` markers back out of the generated answer, so the UI only lists the sources the model actually cited — not everything that was retrieved.
+The application consists of two main pipelines: **document ingestion** and **query processing**.
+
+### Ingestion Pipeline
+
+```text
+                    ┌──────────────────────┐
+                    │      Documents       │
+                    └──────────┬───────────┘
+                               │
+                         Ingestion
+                               │
+                    ┌──────────▼───────────┐
+                    │ Chunking + Embedding │
+                    └──────────┬───────────┘
+                               │
+                         Qdrant Store
+```
+
+When a document is uploaded:
+
+1. The application detects its actual MIME type.
+2. The appropriate document loader extracts its content.
+3. The extracted content is validated.
+4. The document is split into overlapping chunks.
+5. Each chunk is embedded.
+6. A deterministic ID is generated from the source information and chunk content.
+7. The chunk and its metadata (including the uploading session's ID) are stored in Qdrant.
+
+The deterministic IDs make repeated indexing idempotent and allow unchanged content to be skipped or overwritten consistently.
+
+### Query Pipeline
+
+```text
+Question + Chat History
+          │
+          ▼
+┌─────────────────────┐
+│ Query Condensation  │
+└──────────┬──────────┘
+           │
+      ┌────┴─────┐
+      ▼          ▼
+   Dense        BM25
+  Retrieval    Retrieval
+      │          │
+      └────┬─────┘
+           ▼
+    Reciprocal Rank
+        Fusion
+           │
+           ▼
+  Cross-Encoder Rerank
+           │
+           ▼
+       MMR Selection
+           │
+           ▼
+      LLM Generation
+           │
+           ▼
+   Cited Answer
+```
+
+For each question:
+
+1. Conversation history is used to rewrite follow-up questions into standalone queries when necessary.
+2. The standalone query is sent to both dense and BM25 retrieval, scoped to the requesting session's own documents plus any public (session-less) content.
+3. The two ranked result lists are combined using Reciprocal Rank Fusion.
+4. A cross-encoder reranks the merged candidates.
+5. MMR selects a diverse subset of the highest-quality candidates.
+6. The selected context is passed to the LLM.
+7. The generated answer is parsed for citation markers and presented with the corresponding sources.
+
+---
+
+## How Retrieval Works
+
+### 1. Query Condensation
+
+Multi-turn conversations can produce queries that are incomplete on their own.
+
+For example:
+
+> "What about the second one?"
+
+does not provide enough information for retrieval by itself.
+
+If conversation history is available, the application uses an LLM to rewrite the question into a standalone query such as:
+
+> "What does the second document say about X?"
+
+The rewritten query is then used for retrieval.
+
+For the first question in a conversation, condensation is skipped because there is no previous context to resolve.
+
+---
+
+### 2. Hybrid Retrieval
+
+The application uses two complementary retrieval strategies.
+
+#### Dense Retrieval
+
+The query is embedded and searched against document embeddings stored in Qdrant.
+
+This is useful when the query and relevant passage use different wording but express a similar meaning.
+
+#### BM25 Retrieval
+
+BM25 performs keyword-based retrieval using the document corpus obtained from Qdrant.
+
+This is particularly useful for exact terms such as:
+
+* Names
+* IDs
+* Acronyms
+* Technical terms
+* Other uncommon keywords
+
+Dense and keyword retrieval therefore complement each other: semantic search handles meaning, while BM25 preserves exact-term matching.
+
+---
+
+### 3. Reciprocal Rank Fusion
+
+Dense retrieval and BM25 produce different types of scores, so their raw scores are not directly comparable.
+
+Instead of trying to combine those scores directly, the application combines the **rankings** produced by both retrieval methods.
+
+For a result at rank `r`, the RRF contribution is:
+
+```text
+1 / (k + r)
+```
+
+Results appearing highly in both rankings therefore receive stronger combined rankings.
+
+This provides a simple way to merge heterogeneous retrieval systems without requiring their score distributions to be calibrated to one another.
+
+---
+
+### 4. Cross-Encoder Reranking
+
+After fusion, only a relatively small candidate set is passed to the cross-encoder:
+
+```text
+cross-encoder/ms-marco-MiniLM-L-6-v2
+```
+
+Unlike embedding-based retrieval, the cross-encoder processes the **query and passage together** and produces a relevance score for that specific pair.
+
+This makes it suitable for fine-grained ranking of a small candidate set, while avoiding the computational cost of applying it to the entire document collection.
+
+The application also applies a minimum reranking-score threshold. If the best retrieved context does not meet the threshold, the system avoids generating an answer from weak evidence.
+
+---
+
+### 5. Maximal Marginal Relevance
+
+The reranked candidates may still contain several highly similar chunks.
+
+MMR addresses this by balancing:
+
+* relevance to the query
+* similarity to already-selected chunks
+
+This prevents the final context from being dominated by several near-duplicate passages.
+
+The result is a smaller and more diverse context set for the LLM.
+
+---
+
+### 6. Grounded Generation
+
+The selected chunks are numbered before being passed to the LLM.
+
+The model is instructed to:
+
+* answer using the provided context
+* cite supporting passages using `[n]` markers
+* explicitly indicate when the supplied context does not contain the answer
+
+The application then extracts the citation markers from the generated response and displays the corresponding document sources.
+
+---
 
 ## Example
 
-An actual run against a folder of text-mining course notes indexed through the app:
+The following example uses a set of text-mining course notes indexed through the application.
 
-**Q: What topics are covered in the uploaded documents?**
+### Question
 
-> The uploaded material is a textbook-style overview of text-mining and related information-retrieval techniques. Across the five pages the following subjects are discussed:
->
-> - **Topic modelling and classification** — Latent Dirichlet Allocation (LDA), Dirichlet distributions, and the use of rule-based or machine-learning systems to assign topics to documents [1].
-> - **Recommender and information-filtering systems** — ranking, relevance scoring, and the need to suggest both known and unknown items to users [2].
-> - **Summarisation** — the distinction between extractive and abstractive summarisation, human judgments, and extrinsic evaluation metrics [3].
-> - **Exploratory analysis and the fundamentals of text mining** — handling unstructured text, dealing with lexical, syntactic and semantic ambiguities, and the overall goals of discovering useful patterns [4].
-> - **Information retrieval basics** — metadata, Boolean query operators (AND, OR, NOT), binary relevance, and the inverted index representation used by web search engines [5].
+> What topics are covered in the uploaded documents?
 
-In the actual UI, each `[n]` corresponds to a numbered source chip (file name + page/slide) shown below the answer, so you can see exactly which document backs each claim.
+### Answer
+
+The uploaded material covers several areas of text mining and information retrieval, including:
+
+* **Topic modelling and classification** — including Latent Dirichlet Allocation (LDA) and topic assignment.
+* **Recommender and information-filtering systems** — including ranking and relevance scoring.
+* **Text summarisation** — including extractive and abstractive approaches and evaluation.
+* **Exploratory text analysis** — including lexical, syntactic, and semantic challenges.
+* **Information retrieval** — including metadata, Boolean operators, binary relevance, and inverted indexes.
+
+Each `[n]` citation in the generated response corresponds to a source entry containing the document name and page or slide number.
+
+---
 
 ## Design Decisions
 
-A few choices that weren't the "obvious" first pass, and why:
+### Deterministic Chunk IDs
 
-- **Deterministic chunk IDs, not random UUIDs.** Each chunk's vector store ID is a hash of `(file_path, page/slide position, content)` rather than a random ID. That means re-indexing an unchanged file overwrites the same entries instead of creating duplicates, while an edited chunk gets a new ID so stale content doesn't linger. It's also what makes upload-triggered indexing safe to run incrementally: only the newly uploaded files get re-embedded, not the whole document collection.
-- **MIME sniffing over trusting file extensions.** Files are dispatched to a loader by inspecting actual content (`python-magic`), not the filename, since a mislabeled or renamed file shouldn't silently skip validation or hit the wrong parser.
-- **LLM calls have retry + failover, embeddings have retry.** Every Groq/embedding call is wrapped with exponential backoff (`tenacity`), and chat generation additionally fails over to a secondary Groq API key if the primary's retries are exhausted — a rate-limited key degrades the app instead of taking it down.
-- **Redis session memory is a sliding TTL, not a hard expiry.** Every turn re-sets the same key with a fresh TTL, so an active conversation never expires mid-use, but an abandoned one is cleaned up automatically rather than growing Redis memory forever.
-- **Background indexing + polling, not a blocking upload request.** Uploads return immediately; the actual chunk/embed/index work runs in a FastAPI background task while the UI polls `/status`. Embedding a large PDF shouldn't hang the request.
-- **Results are re-sorted by score right before they're returned.** The MMR step just before this intentionally reorders results for diversity, not pure relevance — but other code (like the "not enough relevant context" check in generation) needs to reliably assume "the best match is first." Rather than have every caller re-derive that, retrieval sorts once at the boundary and hands back a predictable order.
+Instead of assigning random UUIDs to chunks, the application generates deterministic IDs from source information, position, and content.
+
+This means:
+
+* unchanged chunks receive the same ID when re-indexed
+* existing records can be updated without creating duplicates
+* modified chunks receive different IDs
+* incremental indexing does not require reprocessing the entire corpus
+
+---
+
+### MIME Detection Instead of File Extensions
+
+The application uses `python-magic` to determine the actual MIME type of an uploaded file.
+
+This prevents a renamed or incorrectly labelled file from being silently routed to an inappropriate parser.
+
+Supported formats include:
+
+* PDF
+* DOCX
+* PPTX
+* TXT
+* Markdown
+
+---
+
+### Retry and LLM Failover
+
+External API calls use exponential-backoff retries through `tenacity`.
+
+LLM generation additionally supports a secondary Groq API key. If the primary key continues to fail after retries, the application can fall back to the secondary key.
+
+This provides resilience against temporary API failures or rate limits.
+
+---
+
+### Sliding Redis Session TTL
+
+Conversation history is stored in Redis using a sliding expiration window.
+
+Each new conversation turn refreshes the session's TTL. Active conversations therefore remain available, while inactive sessions eventually expire automatically.
+
+---
+
+### Background Indexing
+
+Document processing can involve:
+
+* parsing
+* validation
+* chunking
+* embedding
+* vector-store updates
+
+These operations run as a FastAPI background task after the upload request is accepted.
+
+The UI polls the indexing status rather than keeping the upload request open for the entire operation.
+
+---
+
+### Predictable Retrieval Output
+
+MMR intentionally changes the ordering of candidates to improve diversity.
+
+Before returning the final retrieval results to downstream components, the application re-sorts them by relevance score so consumers can consistently treat the highest-scoring result as the first result.
+
+---
+
+### Session-Scoped Document Isolation
+
+Each chunk is tagged with the uploading session's ID. Retrieval filters results to that session's own uploads plus any content with no session ID at all (public or CLI-indexed content), using a Qdrant `should`/`IsEmpty` filter rather than a strict equality match — a strict match would also hide the public content from every session.
+
+Filtering within a single collection is Qdrant's recommended approach to multi-tenancy. A separate collection per user would not scale as well and would also require a separate BM25 index per user instead of one shared, cached index.
+
+This is session-cookie-based isolation, not full account-based authentication: a fresh browser session sees no documents until it uploads its own, but there is no login and no access to the same documents from another device or browser (see [Limitations](#limitations)).
+
+---
 
 ## Tech Stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Language | Python 3.12+ | Best-supported ecosystem for both the LLM/RAG tooling and the document-parsing libraries involved |
-| Web framework | FastAPI + Jinja2 + HTMX | Server-rendered partials over a JS framework — small surface area, no client-side state to sync |
-| LLM | Groq (`openai/gpt-oss-120b`, configurable) | Fast inference; wrapped with retry + secondary-key failover |
-| Embeddings | HuggingFace `BAAI/bge-small-en-v1.5` (default) or Gemini | Swappable via config; local model avoids per-call embedding cost during development |
-| Vector store | Qdrant | Native payload filtering + hybrid-friendly (raw points scroll for BM25 corpus building) |
-| Keyword search | `rank_bm25` (BM25Okapi) | In-process, no separate search infra needed for this scale |
-| Reranking | `sentence-transformers` cross-encoder | Query-aware relevance scoring beyond cosine similarity |
-| Session memory | Redis | Sliding-TTL chat history, shared cookie-based session id |
-| Document parsing | `pdfplumber` (PDF), `docx2txt` (DOCX), `python-pptx` (PPTX), `python-magic` (MIME dispatch) | Format-specific extraction dispatched by real content type, not file extension |
-| Observability | Logfire | Structured spans across ingestion, retrieval, and generation |
-| Resilience | `tenacity` | Exponential-backoff retries on external API calls |
-| Containerization | Docker | Runs the app without a local Python setup, using the same `.env` as the venv path |
+| Layer                  | Technology                            | Purpose                                   |
+| ---------------------- | ------------------------------------- | ----------------------------------------- |
+| Language               | Python 3.12+                          | Application and RAG pipeline              |
+| Web framework          | FastAPI                               | API and web application backend           |
+| Templates/UI           | Jinja2 + HTMX                         | Server-rendered interactive interface     |
+| LLM                    | Groq (`openai/gpt-oss-120b`)          | Query condensation and answer generation  |
+| Embeddings             | Hugging Face `BAAI/bge-small-en-v1.5` | Local document and query embeddings       |
+| Alternative embeddings | Gemini                                | Configurable API-based embedding provider |
+| Vector database        | Qdrant                                | Vector storage and similarity retrieval   |
+| Keyword retrieval      | `rank_bm25`                           | BM25 keyword search                       |
+| Reranking              | `sentence-transformers`               | Cross-encoder relevance scoring           |
+| Session memory         | Redis                                 | Conversation history with TTL             |
+| PDF parsing            | `pdfplumber`                          | PDF text extraction                       |
+| DOCX parsing           | `docx2txt`                            | Word document extraction                  |
+| PPTX parsing           | `python-pptx`                         | PowerPoint extraction                     |
+| MIME detection         | `python-magic`                        | Content-based file-type detection         |
+| Observability          | Logfire                               | Structured application tracing. Local runs auto-detect credentials from `logfire auth`; Docker runs need `LOGFIRE_TOKEN` in `.env` instead, since the local credentials file isn't available inside a container |
+| Resilience             | `tenacity`                            | Retry and exponential backoff             |
+| Containerization       | Docker                                | Reproducible application deployment       |
+
+---
 
 ## Project Structure
 
-```
+```text
 app/
-├── config.py                  # pydantic-settings: every tunable in one place
-├── models.py                  # embedding model + LLM client construction (retry/failover)
+├── config.py                  # Application configuration
+├── models.py                  # Embedding and LLM client construction
+│
 ├── indexing/
-│   ├── document_loader/       # MIME detection → per-format loaders → validation → metadata normalization
-│   ├── chunking/               # recursive text splitting (markdown-aware)
-│   └── pipeline.py             # orchestrates load → chunk → index (full corpus or a file subset)
+│   ├── document_loader/       # MIME detection and document loaders
+│   ├── chunking/              # Document chunking
+│   └── pipeline.py            # Ingestion and indexing orchestration
+│
 ├── vectorstore/
-│   ├── client.py                # Qdrant client + collection bootstrap
-│   ├── indexer.py               # embeds + upserts chunks
-│   └── ids.py                   # deterministic point-id hashing
+│   ├── client.py              # Qdrant client and collection setup
+│   ├── indexer.py             # Embedding and vector upserts
+│   └── ids.py                 # Deterministic chunk IDs
+│
 ├── retrieval/
-│   ├── retriever.py              # orchestrates hybrid retrieve → fuse → rerank → MMR
-│   ├── fusion.py                 # Reciprocal Rank Fusion + MMR selection
-│   ├── bm25_index.py             # in-memory BM25 index built from Qdrant's own payloads
-│   └── reranker.py               # cross-encoder scoring
+│   ├── retriever.py           # Retrieval pipeline orchestration
+│   ├── fusion.py               # RRF and MMR
+│   ├── bm25_index.py           # In-memory BM25 index
+│   └── reranker.py             # Cross-encoder reranking
+│
 ├── generation/
-│   ├── query_condenser.py        # rewrites follow-ups into standalone questions
-│   └── generator.py               # builds cited context, calls the LLM, parses citations
+│   ├── query_condenser.py     # Follow-up question rewriting
+│   └── generator.py            # Context construction and answer generation
+│
 └── web/
-    ├── main.py, routes/           # FastAPI app: upload, chat, status endpoints
-    ├── memory.py                   # Redis-backed session chat history
-    └── templates/, static/          # HTMX-driven UI (dropzone upload, live chat log)
+    ├── main.py                # FastAPI application
+    ├── routes/                # Upload, chat, and status endpoints
+    ├── memory.py              # Redis-backed conversation memory
+    ├── templates/              # Jinja2 templates
+    └── static/                 # HTMX UI and static assets (CSS, JS)
 ```
+
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.12+ (only needed for the [venv](#run--option-a-python-venv) path — skip it if you're using [Docker](#run--option-b-docker))
-- A [Qdrant](https://qdrant.tech/) instance — the free tier of [Qdrant Cloud](https://cloud.qdrant.io/) works fine, or run one locally (`docker run -p 6333:6333 qdrant/qdrant`)
-- A Redis instance for chat session memory, pointed to via `REDIS_URL` — a hosted free tier ([Redis Cloud](https://redis.io/cloud/), Upstash) or a local one (`brew install redis` / `docker run -p 6379:6379 redis`) both work
-- At least one LLM key ([Groq](https://console.groq.com/)) and one embedding provider configured (HuggingFace runs locally with no key; Gemini needs a Google API key)
+You can run the application using either a local Python environment or Docker.
 
-### Configure
+You will need:
+
+* Python 3.12+ for the virtual-environment setup
+* A Qdrant instance
+* A Redis instance
+* A Groq API key
+* An embedding provider
+
+The default Hugging Face embedding model runs locally and does not require an API key. Gemini can also be configured as an alternative embedding provider.
+
+### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/<your-username>/ai-document-assistant.git
+git clone https://github.com/khannoaman/ai-document-assistant.git
 cd ai-document-assistant
+```
+
+### 2. Configure Environment Variables
+
+Create the environment file:
+
+```bash
 cp .env.example .env
 ```
 
-Fill in `.env` with your Qdrant endpoint/key, Redis URL, Groq API key, and (optionally) a fallback Groq key. `REDIS_URL` defaults to `redis://localhost:6379/0`; point it at a hosted Redis instead if you're not running one locally. All other settings have working defaults — see [Configuration](#configuration).
+Configure the required values in `.env`, including:
 
-### Run — Option A: Python venv
+* Qdrant endpoint and credentials
+* Redis URL
+* Groq API key
+* Optional secondary Groq API key
+* Embedding provider configuration
+* Optional `LOGFIRE_TOKEN`, if sending observability data to Logfire (required for Docker runs specifically; see [Tech Stack](#tech-stack))
+
+The default Redis URL is:
+
+```text
+redis://localhost:6379/0
+```
+
+---
+
+### Option A: Run with Python
+
+Create and activate a virtual environment:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+
+Start the application:
+
+```bash
 uvicorn app.web.main:app --reload --port 8010
 ```
 
-### Run — Option B: Docker
+Then open:
 
-No local Python setup needed — the app runs in a container. Requires your `.env` to already point at a reachable Qdrant + Redis (your own cloud instances, or local ones on the host — see [Prerequisites](#prerequisites)):
+```text
+http://localhost:8010
+```
+
+---
+
+### Option B: Run with Docker
+
+Build the image:
 
 ```bash
 docker build -t ai-document-assistant .
-docker run --rm -p 8010:8010 --env-file .env -v "$(pwd)/data:/app/data" ai-document-assistant
 ```
 
-The first boot downloads the embedding and reranker models from Hugging Face (~100–200MB) since they aren't baked into the image, so the first request after startup will be slower than subsequent ones.
+Run the application:
 
-Either way: open `http://localhost:8010`, upload documents through the UI, and start asking questions — each upload is indexed incrementally, without re-processing the whole corpus.
+```bash
+docker run --rm \
+  -p 8010:8010 \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  ai-document-assistant
+```
+
+The embedding and reranker models are downloaded from Hugging Face on first startup, so the initial model load may take longer than subsequent requests.
+
+---
 
 ## Usage
 
-**Web UI** (how an end user interacts with it) — drag files onto the dropzone, wait for the status badge to read "done," then ask questions in the chat box. The full answer is returned once generation finishes (not token-streamed — see [Roadmap](#roadmap)), with a numbered source list you can expand below it.
+### Web Application
 
-**Bulk/local indexing via CLI** — useful when developing locally with a large batch of files already on disk: drop them into `data/` and run `python -m app.indexing.pipeline` instead of uploading one by one through the browser (under Docker: `docker exec <container> python -m app.indexing.pipeline`). Not part of the deployed user-facing flow.
+The primary workflow is:
 
-**Retrieval/generation CLI**, useful for debugging retrieval quality directly without the LLM in the loop:
+1. Open the web application.
+2. Upload one or more supported documents.
+3. Wait for indexing to complete.
+4. Ask a question in the chat interface.
+5. Review the generated answer and its source citations.
+6. Continue with follow-up questions using the same conversation.
+
+Uploaded documents are only visible within the browser session that uploaded them; a different session (or a cleared-cookie visit) won't see them.
+
+### Bulk Indexing
+
+For local development, documents can also be placed in the `data/` directory and indexed through the CLI:
 
 ```bash
-# Inspect what the retriever actually returns for a query
-python -m app.retrieval.retriever "what were the main findings?" --k 5
+python -m app.indexing.pipeline
+```
 
-# Full RAG answer, optionally with conversation history for testing condensation
-python -m app.generation.generator "what about the second one?" \
+When running inside Docker:
+
+```bash
+docker exec <container> python -m app.indexing.pipeline
+```
+
+Documents indexed this way have no session owner and are treated as public content, visible to every session.
+
+### Retrieval Debugging
+
+The retrieval pipeline can be tested independently of answer generation:
+
+```bash
+python -m app.retrieval.retriever \
+  "what were the main findings?" \
+  --k 5
+```
+
+The generation pipeline can also be tested with conversation history:
+
+```bash
+python -m app.generation.generator \
+  "what about the second one?" \
   --history "what did chapter 3 cover?::Chapter 3 covered feature engineering and..."
 ```
 
+---
+
 ## Configuration
 
-All tunables live in [`app/config.py`](app/config.py) and can be overridden via `.env`. The ones most worth understanding:
+The main configuration options are defined in `app/config.py` and can be overridden through `.env`.
 
-| Setting | Default | Effect |
-|---|---|---|
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 800 / 100 | Chunk granularity — smaller chunks improve precision, larger ones preserve more context per citation |
-| `RETRIEVAL_TOP_K` | 5 | Final number of chunks passed to the LLM |
-| `RETRIEVAL_FETCH_K` | 20 | Candidates pulled from *each* retriever (dense, BM25) before fusion |
-| `RERANK_TOP_N` | 10 | Candidates kept after reranking, before MMR narrows to `top_k` |
-| `MMR_LAMBDA` | 0.5 | 0 = maximize diversity, 1 = maximize pure relevance |
-| `MIN_RERANK_SCORE` | -4.0 | Cross-encoder logit floor — below this, the app refuses to answer rather than guess from weak context |
-| `MAX_MEMORY_TURNS` | 5 | Prior conversation turns retained and fed to the condenser |
-| `SESSION_TTL_SECONDS` | 1800 | Sliding Redis expiry for chat sessions |
-| `EMBEDDING_PROVIDER` | `huggingface` | `huggingface` (local, free) or `gemini` (API-based) |
+| Setting               |       Default | Description                                                     |
+| --------------------- | ------------: | --------------------------------------------------------------- |
+| `CHUNK_SIZE`          |         `800` | Target chunk size                                               |
+| `CHUNK_OVERLAP`       |         `100` | Overlap between adjacent chunks                                 |
+| `RETRIEVAL_TOP_K`     |           `5` | Number of final chunks passed to the LLM                        |
+| `RETRIEVAL_FETCH_K`   |          `20` | Candidates retrieved from each retrieval method                 |
+| `RERANK_TOP_N`        |          `10` | Candidates retained after reranking                             |
+| `MMR_LAMBDA`          |         `0.5` | Relevance/diversity trade-off for MMR                           |
+| `MIN_RERANK_SCORE`    |        `-4.0` | Minimum cross-encoder score required to generate an answer      |
+| `MAX_MEMORY_TURNS`    |           `5` | Number of previous conversation turns supplied to the condenser |
+| `SESSION_TTL_SECONDS` |        `1800` | Redis session expiration time                                   |
+| `EMBEDDING_PROVIDER`  | `huggingface` | `huggingface` or `gemini`                                       |
 
-## Known Limitations
+For MMR:
 
-Being upfront about what this doesn't do (yet):
+```text
+0 → prioritize diversity
+1 → prioritize relevance
+```
 
-- **Single collection, no multi-tenant document isolation** — every uploaded document is queryable by anyone using the app. Not suitable for a public multi-user deployment without adding auth and per-user document scoping first.
-- No automated retrieval-quality evaluation harness — tuning `RETRIEVAL_FETCH_K`, `MMR_LAMBDA`, etc. is currently manual/qualitative, not benchmarked against a labeled question set.
-- No automated tests.
-- Scanned/image-only PDFs aren't OCR'd — they're skipped by the low-content validator, not silently mishandled, but also not supported.
-- BM25 index is rebuilt in-memory per process from a full Qdrant scroll on first use; fine at this scale, would need a persistent/shared index for multi-instance deployment.
+---
+
+## Limitations
+
+The current implementation has several known limitations:
+
+* **Session-scoped, not account-scoped, isolation** — documents are private to the anonymous browser session that uploaded them, not a real user account. There is no login, so clearing cookies or switching browsers loses access to previously uploaded documents, and there is no way to reach the same documents from another device.
+* **No automatic document expiry** — unlike chat history, which has a Redis TTL, a session's uploaded document chunks remain in Qdrant indefinitely after the session itself expires, rather than being cleaned up automatically.
+* **No automated retrieval evaluation** — retrieval parameters are currently tuned qualitatively rather than against a labelled evaluation dataset.
+* **No OCR support** — scanned or image-only PDFs are not currently supported.
+* **In-memory BM25 index** — the BM25 index is built from Qdrant data when first required and is maintained in memory per process. A persistent/shared index would be more appropriate for larger multi-instance deployments.
+* **No streaming responses** — the complete LLM response is returned after generation rather than streamed token-by-token.
+
+---
 
 ## Roadmap
 
-- [ ] Deploy a public live demo
-- [ ] Retrieval evaluation harness (labeled Q&A set + precision/recall metrics) to justify pipeline tuning with numbers instead of intuition
-- [ ] Automated tests around chunking, ID determinism, and the retrieval fusion logic
-- [ ] Streaming LLM responses instead of full-response wait
+* [ ] Add automatic cleanup for orphaned session-scoped documents — a periodic sweep comparing Qdrant's stored session IDs against active Redis sessions, removing chunks whose session has expired
+* [ ] Add persistent user accounts, so uploaded documents follow a login across devices/browsers instead of a single anonymous session cookie
+* [ ] Add a retrieval evaluation harness with a labelled Q&A dataset
+* [ ] Evaluate retrieval using metrics such as Precision@K, Recall@K, and MRR
+* [ ] Add OCR support for scanned documents
+* [ ] Add streaming LLM responses
+* [ ] Improve BM25 indexing for multi-instance deployments
+
+---
+
+## Summary
+
+This project demonstrates a multi-stage RAG architecture designed around **retrieval quality, grounded generation, and session-scoped document isolation**.
+
+The core pipeline combines chunking and embedding, hybrid dense/BM25 retrieval, Reciprocal Rank Fusion, cross-encoder reranking, and MMR context selection before an answer is generated and returned with citations (see the [pipeline diagram](#why-this-project) above).
+
+The project combines retrieval, ranking, conversational context handling, per-session document isolation, resilience, observability, and document processing into a single application that can be run locally or through Docker.

@@ -75,10 +75,17 @@ def invalidate_bm25_index() -> None:
         logfire.info("bm25 index invalidated")
 
 
-def _matches_filters(doc: Document, filters: dict[str, Any] | None) -> bool:
-    if not filters:
-        return True
-    return all(doc.metadata.get(key) == value for key, value in filters.items())
+def _matches_filters(doc: Document, filters: dict[str, Any] | None, session_id: str | None) -> bool:
+    if filters and not all(doc.metadata.get(key) == value for key, value in filters.items()):
+        return False
+    if session_id is not None:
+        # visible if it's this session's own upload, or "public" content
+        # with no session_id at all (CLI/bulk-indexed) — mirrors the Qdrant
+        # side's should-clause in app/retrieval/retriever.py
+        doc_session = doc.metadata.get("session_id")
+        if doc_session is not None and doc_session != session_id:
+            return False
+    return True
 
 
 def search_bm25(
@@ -86,6 +93,7 @@ def search_bm25(
     query: str,
     k: int,
     filters: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> list[tuple[Document, float]]:
     index, documents = get_bm25_index(client)
     if index is None:
@@ -93,7 +101,11 @@ def search_bm25(
 
     scores = index.get_scores(_tokenize(query))
     ranked = sorted(
-        ((doc, float(score)) for doc, score in zip(documents, scores) if _matches_filters(doc, filters)),
+        (
+            (doc, float(score))
+            for doc, score in zip(documents, scores)
+            if _matches_filters(doc, filters, session_id)
+        ),
         key=lambda pair: pair[1],
         reverse=True,
     )

@@ -4,7 +4,7 @@ from langchain_core.documents import Document
 
 
 
-def normalize_metadata(doc: Document, file_path: str, loader_used: str) -> Document:
+def normalize_metadata(doc: Document, file_path: str, loader_used: str, session_id: str | None = None) -> Document:
     raw = doc.metadata
     page = raw.get("page")
 
@@ -15,5 +15,9 @@ def normalize_metadata(doc: Document, file_path: str, loader_used: str) -> Docum
         "page_number": page + 1 if isinstance(page, int) else None,
         "slide_number": raw.get("slide_number"),
         "loader_used": raw.get("loader_used", loader_used),
+        # None for CLI/bulk-indexed content (treated as public — visible to
+        # every session); set for web uploads to scope visibility to the
+        # uploading session only. See app/retrieval/retriever.py.
+        "session_id": session_id,
     }
     return doc

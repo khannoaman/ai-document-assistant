@@ -81,14 +81,18 @@ def generate_answer(
     chat_history: list[tuple[str, str]] | None = None,
     k: int | None = None,
     filters: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Condense `question` against `chat_history` (if any), retrieve context
     via app.retrieval.retrieve() and synthesize a grounded answer. Returns
-    {"answer": str, "sources": list[dict], "context_used": bool, "standalone_question": str}."""
+    {"answer": str, "sources": list[dict], "context_used": bool, "standalone_question": str}.
+
+    session_id scopes retrieval to that session's own uploads plus public
+    content — see app.retrieval.retriever.retrieve()."""
     with logfire.span("generation.answer", question=question):
         standalone_question = condense_question(chat_history or [], question)
 
-        results = retrieve(standalone_question, k=k, filters=filters)
+        results = retrieve(standalone_question, k=k, filters=filters, session_id=session_id)
 
         # results are MMR-ordered (relevance + diversity), not sorted by
         # score, so the gate must check the best score present, not results[0]
