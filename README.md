@@ -6,7 +6,7 @@ The system combines **dense vector retrieval, BM25 keyword search, Reciprocal Ra
 
 ![Demo of uploading a document and asking a grounded, cited question](assets/demo.gif)
 
-> Runs locally with Python or Docker. See [Getting Started](#getting-started).
+> 🚀 **[Live Demo](https://ai-document-assistant-1-1sam.onrender.com/)** — hosted on Render's free tier, so it sleeps after 15 minutes of inactivity; the first request after that can take 30–60 seconds to wake up. Also runs locally with Python or Docker — see [Getting Started](#getting-started).
 
 ---
 
@@ -582,12 +582,17 @@ The main configuration options are defined in `app/config.py` and can be overrid
 | `CHUNK_OVERLAP`       |         `100` | Overlap between adjacent chunks                                 |
 | `RETRIEVAL_TOP_K`     |           `5` | Number of final chunks passed to the LLM                        |
 | `RETRIEVAL_FETCH_K`   |          `20` | Candidates retrieved from each retrieval method                 |
+| `RERANK_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder used for reranking |
 | `RERANK_TOP_N`        |          `10` | Candidates retained after reranking                             |
 | `MMR_LAMBDA`          |         `0.5` | Relevance/diversity trade-off for MMR                           |
 | `MIN_RERANK_SCORE`    |        `-4.0` | Minimum cross-encoder score required to generate an answer      |
 | `MAX_MEMORY_TURNS`    |           `5` | Number of previous conversation turns supplied to the condenser |
 | `SESSION_TTL_SECONDS` |        `1800` | Redis session expiration time                                   |
 | `EMBEDDING_PROVIDER`  | `huggingface` | `huggingface` or `gemini`                                       |
+
+**Note on the live demo specifically:** it runs on Render's free tier (512MB RAM), which isn't enough to hold both the embedding model and the default reranker in memory at once. The deployed instance overrides two settings to fit: `EMBEDDING_PROVIDER=gemini` (API-based, so no local embedding model is loaded) and `RERANK_MODEL=cross-encoder/ms-marco-TinyBERT-L-2-v2` (a much smaller cross-encoder — 2 layers instead of 6). Running locally or on a less memory-constrained host doesn't need either override.
+
+Uploading a very large file to the live demo can still exceed the 512MB ceiling and crash the instance, independent of the model-loading concerns above.
 
 For MMR:
 
